@@ -106,7 +106,14 @@ export async function fetchSpicyDetail(id, { refresh = false } = {}) {
     const safeId = String(id || '').trim();
     if (!/^[a-z0-9_-]{4,128}$/i.test(safeId)) throw new Error('Invalid SpicyChat character ID');
     if (!refresh && detailCache.has(safeId)) return detailCache.get(safeId);
-    const options = { headers: { Accept: 'application/json', 'Cache-Control': 'no-transform' } };
+    // Mandatory SpicyChat application identity header for the public detail API.
+    // This is a public app identifier, not a credential.
+    const options = { headers: {
+        'X-App-Id': 'spicychat',
+        'X-Country': 'US',
+        Accept: 'application/json',
+        'Cache-Control': 'no-transform',
+    } };
     if (GUEST_ID) options.headers['X-Guest-UserId'] = GUEST_ID;
     // Cache only a successful public response. Failed requests remain retryable.
     const promise = (async () => {
