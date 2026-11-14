@@ -431,7 +431,7 @@ class ChartavernProvider extends ProviderBase {
             // Fallback: detail API only (alternate_greetings will be empty)
             const data = await fetchCharacterDetail(parts[0], parts[1], api?.apiRequest);
             if (!data?.card) return null;
-            const result = buildV2FromDetail(data.card, parts[0]);
+            const result = data._embeddedCard?.data ? data._embeddedCard : buildV2FromDetail(data.card, parts[0]);
             if (result) result._listingName = this.getListingName(data.card);
             return result;
         } catch (e) {
@@ -555,9 +555,11 @@ class ChartavernProvider extends ProviderBase {
 
             // Fetch full details for richer V2 card
             let cardData = null;
+            let embeddedCard = null;
             try {
                 const detail = await fetchCharacterDetail(author, slug, api?.apiRequest);
                 if (detail?.card) cardData = detail.card;
+                if (detail?._embeddedCard?.data) embeddedCard = detail._embeddedCard;
             } catch (e) {
                 console.warn('[ChartavernProvider] Detail fetch failed, falling back to hit data:', e.message);
             }
@@ -568,7 +570,9 @@ class ChartavernProvider extends ProviderBase {
             const altGreetings = Array.isArray(hitData?.alternativeFirstMessage) ? hitData.alternativeFirstMessage : [];
             let characterCard;
             if (cardData) {
-                characterCard = buildV2FromDetail(cardData, author, altGreetings);
+                // CT_PNG_DETAILS_BRIDGE_V2: keep the complete embedded definition and lorebook.
+                characterCard = embeddedCard?.data ? structuredClone(embeddedCard)
+                    : buildV2FromDetail(cardData, author, altGreetings);
                 // Backfill tags from hitData or search if detail API returned none
                 if (!characterCard.data.tags?.length) {
                     if (hitData?.tags) {
@@ -582,6 +586,9 @@ class ChartavernProvider extends ProviderBase {
                     }
                 }
             } else if (hitData) {
+                if (!hitData.characterDefinition && !hitData.characterFirstMessage) {
+                    throw new Error('Full character data could not be downloaded; import cancelled to avoid an empty card');
+                }
                 characterCard = buildV2FromSearchHit(hitData);
             } else {
                 throw new Error('Could not fetch character data from CharacterTavern');
@@ -616,6 +623,16 @@ class ChartavernProvider extends ProviderBase {
                 try {
                     const pngCard = api.extractCharacterDataFromPng?.(imageBuffer);
                     if (pngCard?.data) {
+                        // CT_SVELTEKIT_BRIDGE_V1: preserve the full definition from downloaded PNG.
+                        for (const field of [
+                            'description', 'personality', 'scenario', 'first_mes', 'mes_example',
+                            'system_prompt', 'post_history_instructions', 'creator_notes',
+                            'creator', 'character_version'
+                        ]) {
+                            if (!characterCard.data[field] && pngCard.data[field]) {
+                                characterCard.data[field] = pngCard.data[field];
+                            }
+                        }
                         if (!characterCard.data.alternate_greetings?.length && pngCard.data.alternate_greetings?.length) {
                             characterCard.data.alternate_greetings = pngCard.data.alternate_greetings;
                         }
