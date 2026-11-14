@@ -47,3 +47,15 @@ This is not affiliated with SpicyChat. Respect authors' visibility settings and 
 - Unit-style checks: syntactic parse, provider initialization with mocked dependencies, and visibility/import guard cases pass.
 
 **Still requires a live user test:** the remote character detail response, modal display, duplicate-confirmation flow, image handling, import into SillyTavern, and infinite-scroll behavior on the user's installed instance. Do not merge this experimental branch into main until verified.
+
+
+## Tag filters and hiding closed definitions
+
+- SpicyChat → **Tags** opens a searchable list of tag facets returned by Typesense (up to 100 per search).
+- Clicking a tag cycles **include (+)** → **exclude (−)** → **off**. Multiple included tags match *any* of the selected tags; excluded tags are filtered out.
+- **Clear tags** resets both selections.
+- **Hide hidden definitions** applies the search-index flag `definition_visible:true` on the server before pagination. It also checks the same field when normalizing returned hits.
+- The hidden-definitions toggle persists as the `spicyHideHiddenDefinitions` Character Library setting. Other tag selections are currently per-session.
+- The search-index flag is only an indication: actual import eligibility is validated later against the full public detail endpoint. Even with hidden cards filtered out, a listing may lack a complete greeting or definition.
+- Tags come from the searchable public index. The facet list is contextual, not a guaranteed complete catalog.
+- Mocked regression checks covered tag filter construction, escaping, hide flag, facet extraction, and page 1–3 queries. **Live filtering and actual field support need verification on the installed SpicyChat connection.**
