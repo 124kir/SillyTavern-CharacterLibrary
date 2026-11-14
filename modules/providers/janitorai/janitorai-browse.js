@@ -188,7 +188,7 @@ function renderGrid(characters, append = false) {
 }
 
 function updateLoadMore() {
-    view.updateLoadMoreVisibility(activeLoadMoreId(), jaHasMore, jaCharacters.length > 0);
+    view.updateLoadMoreVisibility(activeLoadMoreId(), jaHasMore, jaCharacters.length > 0 || jaFilterPublicDefinitionOnly);
 }
 
 // ========================================
@@ -355,7 +355,7 @@ async function loadCharacters(append = false) {
 
         // Client filters can empty a page, so pull a few more while pages remain.
         let autoFetches = 0;
-        while (hits.length < 12 && jaCurrentPage < jaTotalPages && autoFetches < 3 && delegatesInitialized && !checkBlockedCode) {
+        while (hits.length < 12 && jaCurrentPage < jaTotalPages && autoFetches < 3 && delegatesInitialized && !checkBlockedCode && !jaFilterPublicDefinitionOnly) {
             autoFetches++;
             jaCurrentPage++;
             const more = await fetchJanitoraiCharacters({
@@ -408,7 +408,7 @@ async function loadCharacters(append = false) {
                 <div style="grid-column: 1 / -1; padding: 40px; text-align: center; color: var(--text-muted);">
                     <i class="fa-solid fa-ghost" style="font-size: 2rem; opacity: 0.5;"></i>
                     <p style="margin-top: 12px; font-weight: 600;">No characters found</p>
-                    <p style="margin-top: 8px; font-size: 0.9em;">Try a different search term or relax your tag filters.</p>
+                    <p style="margin-top: 8px; font-size: 0.9em;">Try a different search term, load more, or relax your filters.</p>
                 </div>
             `;
         }
