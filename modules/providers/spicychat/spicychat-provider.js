@@ -44,7 +44,7 @@ class SpicyChatBrowseView extends BrowseView {
         super(provider);
         this.page = 1;
         this.query = '';
-        this.sort = 'popular';
+        this.sort = 'trending';
         this.nsfw = false;
         this.hideHidden = CoreAPI.getSetting?.('spicyHideHiddenDefinitions') === true;
         this.tagInclude = new Set();
@@ -66,7 +66,9 @@ class SpicyChatBrowseView extends BrowseView {
     getSettingsConfig() {
         return {
             browseSortOptions: [
-                { value: 'popular', label: 'Trending (24h)' },
+                { value: 'trending', label: 'Trending' },
+                { value: 'rating', label: 'Top Rated' },
+                { value: 'popular', label: 'Popular' },
                 { value: 'newest', label: 'Newest' },
             ],
             followingSortOptions: [], viewModes: [],
@@ -79,7 +81,7 @@ class SpicyChatBrowseView extends BrowseView {
     }
 
     renderFilterBar() {
-        return '<div class="browse-sort-container"><select id="spicySort" class="glass-select" aria-label="SpicyChat sorting"><option value="popular">Trending</option><option value="newest">Newest</option></select></div>' +
+        return '<div class="browse-sort-container"><select id="spicySort" class="glass-select" aria-label="SpicyChat sorting"><option value="trending">Trending</option><option value="rating">Top Rated</option><option value="popular">Popular</option><option value="newest">Newest</option></select></div>' +
             '<details id="spicyTagsPanel" class="browse-tags-dropdown-container" style="position:relative">' +
             '<summary id="spicyTagsSummary" class="glass-btn" style="cursor:pointer;list-style:none"><i class="fa-solid fa-tags"></i> Tags</summary>' +
             '<div class="dropdown-menu browse-tags-dropdown" style="display:block;position:absolute;z-index:100;right:0;min-width:260px;max-height:360px;overflow:auto;background:var(--glass-bg, #222);padding:10px;border:1px solid var(--glass-border, #555)">' +
@@ -175,7 +177,7 @@ class SpicyChatBrowseView extends BrowseView {
         this.active = true;
         if (options.domRecreated) {
             this.query = '';
-            this.sort = 'popular';
+            this.sort = 'trending';
             this.nsfw = false;
             this.tagFacets = [];
             this.tagInclude.clear();
@@ -221,7 +223,7 @@ class SpicyChatBrowseView extends BrowseView {
 
     newSearch() {
         this.query = document.getElementById('spicySearch')?.value?.trim() || '';
-        this.sort = document.getElementById('spicySort')?.value || 'popular';
+        this.sort = document.getElementById('spicySort')?.value || 'trending';
         this.nsfw = document.getElementById('spicyNsfw')?.checked === true;
         this.hideHidden = document.getElementById('spicyHideHidden')?.checked === true;
         void this.loadPage(true);
