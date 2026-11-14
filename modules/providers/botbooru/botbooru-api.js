@@ -88,7 +88,9 @@ export async function fetchWithProxy(url, opts = {}) {
     const auth = opts.headers?.Authorization;
     if (auth && _apiRequest && url.startsWith(BOTBOORU_BASE)) {
         const { available, basicAuth } = await probeClHelper();
-        if (available && basicAuth) {
+        // Route authenticated requests through the local cl-helper whenever it is available.
+// Using the direct fallback when basic auth is disabled can lose the account flags.
+if (available) {
             const path = url.slice(BOTBOORU_BASE.length) || '/';
             const headers = {
                 'X-CSRF-Token': _getCSRFToken?.() || '',
