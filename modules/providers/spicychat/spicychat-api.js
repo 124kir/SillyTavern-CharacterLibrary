@@ -64,11 +64,18 @@ function spicyTagArray(values) {
     return [...new Set(values.filter(x => typeof x === 'string').map(x => x.trim()).filter(x => x.length > 0 && x.length <= 80))].slice(0, 12);
 }
 
-export async function searchSpicyCharacters({ query = '', page = 1, perPage = 24, nsfw = false, sort = 'popular', includeTags = [], excludeTags = [], hideHidden = false } = {}) {
+export async function searchSpicyCharacters({ query = '', page = 1, perPage = 24, nsfw = false, sort = 'trending', includeTags = [], excludeTags = [], hideHidden = false } = {}) {
     const config = await publicSearchKey();
     const safePage = Math.min(100, Math.max(1, Number(page) || 1));
     const safePerPage = Math.min(48, Math.max(1, Number(perPage) || 24));
-    const sortBy = sort === 'newest' ? 'createdAt:desc' : 'num_messages_24h:desc';
+    // Match SpicyChat's four public catalog ordering modes.
+    const sortFields = {
+        trending: 'num_messages_24h:desc',
+        rating: 'rating_score:desc',
+        popular: 'num_messages:desc',
+        newest: 'createdAt:desc',
+    };
+    const sortBy = sortFields[sort] || sortFields.trending;
     // GET requests are supported by SillyTavern's generic proxy more reliably than JSON POST.
     const params = new URLSearchParams({
         q: String(query || '').slice(0, 140).trim() || '*',
