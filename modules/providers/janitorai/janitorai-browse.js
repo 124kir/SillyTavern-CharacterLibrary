@@ -2,6 +2,7 @@
 import { BrowseView } from '../browse-view.js';
 import CoreAPI from '../../core-api.js';
 import { janitoraiSessionStatus } from '../janitor-session.js';
+import { filterPublicJanitoraiDefinitions } from './janitorai-definition-filter.js';
 import { IMG_PLACEHOLDER, formatNumber, BROWSE_PURIFY_CONFIG, skeletonLines, deferRender, deferCall, isMobileMode, finishBrowseImport, renderBrowseError, buildProviderNotice } from '../provider-utils.js';
 import {
     HAMPTER_PAGE_SIZE,
@@ -76,6 +77,7 @@ let jaFilterHideOwned = false;
 // Listing rows carry a believable is_proxy_enabled, unlike showdefinition, which always reads
 // false there. So this hides no-proxy rows, and only the preview can confirm a locked definition.
 let jaFilterHideNoProxy = false;
+let jaFilterPublicDefinitionOnly = false;
 let jaFilterHidePossible = false;
 /** @type {Set<number>} */
 let jaIncludeTags = new Set();
@@ -336,11 +338,24 @@ async function loadCharacters(append = false) {
         }
 
         let hits = data.characters.filter(passesClientFilters);
+        let checkedHidden = 0;
+        let checkedUnknown = 0;
+        let checkBlockedCode = '';
+        if (jaFilterPublicDefinitionOnly) {
+            const checked = await filterPublicJanitoraiDefinitions(hits, {
+                fetchDetail: fetchJanitoraiCharacter, isHidden: hasHiddenDefinition, signal,
+            });
+            if (thisToken !== jaLoadToken || !delegatesInitialized) return;
+            hits = checked.characters;
+            checkedHidden += checked.hidden;
+            checkedUnknown += checked.unknown;
+            checkBlockedCode = checked.blockedCode;
+        }
         jaTotalPages = data.total > 0 ? Math.ceil(data.total / (data.pageSize || HAMPTER_PAGE_SIZE)) : 0;
 
         // Client filters can empty a page, so pull a few more while pages remain.
         let autoFetches = 0;
-        while (hits.length < 12 && jaCurrentPage < jaTotalPages && autoFetches < 3 && delegatesInitialized) {
+        while (hits.length < 12 && jaCurrentPage < jaTotalPages && autoFetches < 3 && delegatesInitialized && !checkBlockedCode) {
             autoFetches++;
             jaCurrentPage++;
             const more = await fetchJanitoraiCharacters({
@@ -355,7 +370,18 @@ async function loadCharacters(append = false) {
                 creatorIds,
             });
             if (thisToken !== jaLoadToken || !delegatesInitialized) return;
-            hits = hits.concat(more.characters.filter(passesClientFilters));
+            let extra = more.characters.filter(passesClientFilters);
+            if (jaFilterPublicDefinitionOnly) {
+                const checked = await filterPublicJanitoraiDefinitions(extra, {
+                    fetchDetail: fetchJanitoraiCharacter, isHidden: hasHiddenDefinition, signal,
+                });
+                if (thisToken !== jaLoadToken || !delegatesInitialized) return;
+                extra = checked.characters;
+                checkedHidden += checked.hidden;
+                checkedUnknown += checked.unknown;
+                checkBlockedCode = checked.blockedCode;
+            }
+            hits = hits.concat(extra);
         }
 
         if (append) {
@@ -368,6 +394,14 @@ async function loadCharacters(append = false) {
         jaQueueWatchSince = 0;
 
         renderGrid(jaCharacters, append);
+        if (jaFilterPublicDefinitionOnly && (checkedHidden || checkedUnknown)) {
+            const summary = `Definition filter: ${checkedHidden} hidden, ${checkedUnknown} unverified excluded.`;
+            if (checkedUnknown) {
+                showToast(`${summary}${checkBlockedCode ? ' JanitorAI blocked further checks (' + checkBlockedCode + ').' : ' Retry later to check missing definitions.'}`, 'warning', 7000);
+            } else {
+                debugLog('[JanitoraiBrowse]', summary);
+            }
+        }
 
         if (!append && jaCharacters.length === 0 && grid) {
             grid.innerHTML = `
@@ -1396,7 +1430,7 @@ function updateTagsButton() {
 function updateFiltersButton() {
     const btn = document.getElementById('janitoraiFiltersBtn');
     if (!btn) return;
-    const count = [jaFilterHideOwned, jaFilterHidePossible, jaFilterHideNoProxy].filter(Boolean).length;
+    const count = [jaFilterHideOwned, jaFilterHidePossible, jaFilterHideNoProxy, jaFilterPublicDefinitionOnly].filter(Boolean).length;
     btn.classList.toggle('has-filters', count > 0);
     const span = btn.querySelector('span');
     if (span) span.textContent = count > 0 ? `Features (${count})` : 'Features';
@@ -1702,6 +1736,7 @@ function initView() {
         ['janitoraiFilterHideOwned', jaFilterHideOwned],
         ['janitoraiFilterHidePossible', jaFilterHidePossible],
         ['janitoraiFilterHideNoProxy', jaFilterHideNoProxy],
+        ['janitoraiFilterPublicDefinitionOnly', jaFilterPublicDefinitionOnly],
     ]) {
         const el = document.getElementById(id);
         if (el) el.checked = value;
@@ -1864,6 +1899,11 @@ function initView() {
     });
     on('janitoraiFilterHideNoProxy', 'change', (e) => {
         jaFilterHideNoProxy = e.target.checked;
+        updateFiltersButton();
+        loadCharacters(false);
+    });
+    on('janitoraiFilterPublicDefinitionOnly', 'change', (e) => {
+        jaFilterPublicDefinitionOnly = e.target.checked;
         updateFiltersButton();
         loadCharacters(false);
     });
@@ -2088,7 +2128,8 @@ class JanitoraiBrowseView extends BrowseView {
                     <label class="filter-checkbox"><input type="checkbox" id="janitoraiFilterHideOwned"> <i class="fa-solid fa-check"></i> Hide Owned Characters</label>
                     <label class="filter-checkbox"><input type="checkbox" id="janitoraiFilterHidePossible"> <i class="fa-solid fa-check" style="color: #f0a500;"></i> Hide Possible Matches</label>
                     <div class="dropdown-section-title">Definitions:</div>
-                    <label class="filter-checkbox" title="Creators who turn off proxy access make a locked definition unrecoverable by the normal extraction."><input type="checkbox" id="janitoraiFilterHideNoProxy"> <i class="fa-solid fa-lock"></i> Hide No-Proxy Characters</label>
+                    <label class="filter-checkbox" title="Check each character detail. Show only confirmed public definitions. Extra API requests, up to 2 at once; unavailable checks are excluded, not classified as hidden."><input type="checkbox" id="janitoraiFilterPublicDefinitionOnly"> <i class="fa-solid fa-eye"></i> Public Definitions Only (slow)</label>
+                    <label class="filter-checkbox" title="Hide characters whose creators disabled proxy access. This does not indicate whether their definition is public."><input type="checkbox" id="janitoraiFilterHideNoProxy"> <i class="fa-solid fa-lock"></i> Hide No-Proxy Characters</label>
                 </div>
             </div>
 
