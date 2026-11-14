@@ -34,3 +34,16 @@ This is a test prototype, **not a verified working search integration** and not 
 This is not affiliated with SpicyChat. Respect authors' visibility settings and the site's terms of service. Do not import or redistribute private definitions.
 
 **No secrets or access tokens are committed.**
+
+
+## Native browse/preview/import update (14 November 2026)
+
+- Renders cards using Character Library's standard `.browse-card` structure.
+- Uses the shared `BrowseView` infinite-scroll handler on `.gallery-content`. The provider implements `canLoadMore()` / `loadMore()`; the manual Load More button is shown only when infinite scroll is disabled in settings.
+- Click and keyboard Enter/Space open an in-library modal with creator, tags, summary, messages, public definition, scenario and greeting. The modal has an external Open button.
+- Public details are read from `GET /v2/characters/{id}`. An anonymous guest ID is generated only for the current browser session; no account tokens/cookies are used.
+- Import calls Character Library's shared `importFromPng()` pipeline, **only** when the detail endpoint explicitly reports `definition_visible: true`, a non-empty definition and a greeting. Existing cards are never automatically replaced. Duplicate imports require a user decision.
+- Hidden definitions are not imported or reconstructed. Preview may still show public listing information and public greetings.
+- Unit-style checks: syntactic parse, provider initialization with mocked dependencies, and visibility/import guard cases pass.
+
+**Still requires a live user test:** the remote character detail response, modal display, duplicate-confirmation flow, image handling, import into SillyTavern, and infinite-scroll behavior on the user's installed instance. Do not merge this experimental branch into main until verified.
