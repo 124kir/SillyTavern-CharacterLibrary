@@ -93,3 +93,90 @@ export async function searchSpicyCharacters({ query = '', page = 1, perPage = 24
         perPage: safePerPage,
     };
 }
+
+
+// Public detail endpoint is independent from Typesense. Do not send site cookies or
+// authentication tokens: closed character definitions remain unavailable.
+const SPICY_DETAIL_BASE = 'https://prod.nd-api.com/v2/characters/';
+const detailCache = new Map();
+const GUEST_ID = (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
+    ? crypto.randomUUID() : null;
+
+export async function fetchSpicyDetail(id, { refresh = false } = {}) {
+    const safeId = String(id || '').trim();
+    if (!/^[a-z0-9_-]{4,128}$/i.test(safeId)) throw new Error('Invalid SpicyChat character ID');
+    if (!refresh && detailCache.has(safeId)) return detailCache.get(safeId);
+    const options = { headers: { Accept: 'application/json', 'Cache-Control': 'no-transform' } };
+    if (GUEST_ID) options.headers['X-Guest-UserId'] = GUEST_ID;
+    // Cache only a successful public response. Failed requests remain retryable.
+    const promise = (async () => {
+        const response = await fetchWithProxy(SPICY_DETAIL_BASE + encodeURIComponent(safeId), options);
+        if (!response.ok) throw new Error('SpicyChat character detail HTTP ' + response.status);
+        const payload = await response.json();
+        const raw = payload?.character && typeof payload.character === 'object' ? payload.character : payload;
+        if (!raw || typeof raw !== 'object') throw new Error('SpicyChat detail has an invalid format');
+        if (raw.visibility && raw.visibility !== 'public') throw new Error('This character is not publicly visible');
+        const returnedId = String(raw.character_id || raw.id || safeId);
+        if (returnedId !== safeId) throw new Error('SpicyChat returned an unexpected character ID');
+        return raw;
+    })().catch(error => { detailCache.delete(safeId); throw error; });
+    detailCache.set(safeId, promise);
+    return promise;
+}
+
+// Do not conflate publicly readable introduction text with the creator's hidden definition.
+function textValue(value) {
+    if (typeof value === 'string') return value.trim();
+    if (!value || typeof value !== 'object') return '';
+    if (Array.isArray(value)) return value.map(textValue).filter(Boolean).join('\n');
+    return textValue(value.text || value.content || value.message || value.value || value.prologue || value.greeting);
+}
+
+export function parseSpicyDetail(raw, hit = {}) {
+    if (!raw || typeof raw !== 'object') throw new Error('Invalid public SpicyChat detail');
+    const publicDefinition = raw.definition_visible === true;
+    const rawGreetings = [raw.greeting, ...(Array.isArray(raw.alternate_greetings) ? raw.alternate_greetings : []),
+        ...(Array.isArray(raw.greetings) ? raw.greetings : [])];
+    const greetings = [...new Set(rawGreetings.flatMap(v => Array.isArray(v) ? v.map(textValue) : [textValue(v)]).filter(Boolean))];
+    const examplesRaw = raw.example_dialogue || raw.exampleConversation || raw.exampleMessages || raw.conversation_examples || raw.dialogue || '';
+    const examples = Array.isArray(examplesRaw)
+        ? examplesRaw.map(item => {
+            if (typeof item === 'string') return item;
+            const role = String(item?.role || item?.speaker || '').toLowerCase();
+            const speaker = role === 'assistant' || role === 'character' ? '{{char}}' : '{{user}}';
+            const content = textValue(item);
+            return content ? speaker + ': ' + content : '';
+        }).filter(Boolean).join('\n')
+        : textValue(examplesRaw);
+    const privateDefinition = publicDefinition
+        ? textValue(raw.definition || raw.persona || raw.character_definition || raw.characterDefinition || raw.personality)
+        : '';
+    return {
+        id: String(raw.character_id || raw.id || hit.id || ''),
+        name: textValue(raw.name) || hit.name || 'Unnamed',
+        creator: textValue(raw.creator_username || raw.creator) || hit.creator || '',
+        tagline: textValue(raw.title || raw.description) || hit.title || '',
+        avatar: hit.avatar || normalizeSpicyHit(raw)?.avatar || '',
+        tags: Array.isArray(raw.tags) ? raw.tags.filter(x => typeof x === 'string').slice(0, 100) : (hit.tags || []),
+        isNsfw: raw.is_nsfw === true || raw.avatar_is_nsfw === true || hit.isNsfw === true,
+        messages: Number(raw.num_messages) || hit.messages || 0,
+        definitionVisible: publicDefinition,
+        description: privateDefinition,
+        personality: publicDefinition ? textValue(raw.personality) : '',
+        scenario: publicDefinition ? textValue(raw.scenario) : '',
+        firstMessage: greetings[0] || '',
+        alternateGreetings: greetings.slice(1),
+        examples: publicDefinition ? examples : '',
+        systemPrompt: publicDefinition ? textValue(raw.system_prompt) : '',
+        postHistory: publicDefinition ? textValue(raw.post_history_instructions) : '',
+        url: hit.url || ('https://spicychat.ai/chatbot/' + encodeURIComponent(String(raw.character_id || raw.id || ''))),
+    };
+}
+
+export function isSpicyImportable(detail) {
+    // Fail closed if the author did not explicitly publish the definition or if the
+    // resulting card would have no character definition and no greeting.
+    return detail?.definitionVisible === true
+        && !!(detail?.description || detail?.personality)
+        && !!detail?.firstMessage;
+}
