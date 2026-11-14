@@ -54,7 +54,17 @@ export function normalizeSpicyHit(hit) {
     };
 }
 
-export async function searchSpicyCharacters({ query = '', page = 1, perPage = 24, nsfw = false, sort = 'popular' } = {}) {
+// Escape tag names as exact Typesense filter literals.
+function spicyTagLiteral(value) {
+    const tick = String.fromCharCode(96);
+    return tick + String(value).replaceAll('\\', '\\\\').replaceAll(tick, '\\' + tick) + tick;
+}
+function spicyTagArray(values) {
+    if (!Array.isArray(values)) return [];
+    return [...new Set(values.filter(x => typeof x === 'string').map(x => x.trim()).filter(x => x.length > 0 && x.length <= 80))].slice(0, 12);
+}
+
+export async function searchSpicyCharacters({ query = '', page = 1, perPage = 24, nsfw = false, sort = 'popular', includeTags = [], excludeTags = [], hideHidden = false } = {}) {
     const config = await publicSearchKey();
     const safePage = Math.min(100, Math.max(1, Number(page) || 1));
     const safePerPage = Math.min(48, Math.max(1, Number(perPage) || 24));
@@ -67,9 +77,17 @@ export async function searchSpicyCharacters({ query = '', page = 1, perPage = 24
         page: String(safePage),
         per_page: String(safePerPage),
         use_cache: 'true',
+        facet_by: 'tags',
+        max_facet_values: '100',
     });
     const filters = ['type:!=META', 'visibility:=public', 'application_ids:=spicychat'];
     if (!nsfw) filters.push('is_nsfw:false', 'avatar_is_nsfw:false');
+    if (hideHidden) filters.push('definition_visible:true');
+    const included = spicyTagArray(includeTags);
+    const excluded = spicyTagArray(excludeTags).filter(x => !included.includes(x));
+    // Include = any of selected tags (OR), exclude = none of selected tags.
+    if (included.length) filters.push('tags:=[' + included.map(spicyTagLiteral).join(',') + ']');
+    if (excluded.length) filters.push('tags:!=[' + excluded.map(spicyTagLiteral).join(',') + ']');
     params.set('filter_by', filters.join('&&'));
     const url = TYPESENSE_BASE + '/collections/' + encodeURIComponent(config.collection) + '/documents/search?' + params;
     let response;
@@ -86,9 +104,16 @@ export async function searchSpicyCharacters({ query = '', page = 1, perPage = 24
     if (!result || !Array.isArray(result.hits)) {
         throw new Error('SpicyChat returned an unexpected search response');
     }
+    const tagFacet = Array.isArray(result.facet_counts)
+        ? result.facet_counts.find(f => f?.field_name === 'tags') : null;
+    const tagFacets = (tagFacet?.counts || [])
+        .filter(f => typeof f?.value === 'string' && f.value.trim())
+        .map(f => ({ name: f.value.trim(), count: Math.max(0, Number(f.count) || 0) }))
+        .slice(0, 100);
     return {
         found: Number(result.found) || 0,
-        hits: result.hits.map(normalizeSpicyHit).filter(Boolean),
+        hits: result.hits.map(normalizeSpicyHit).filter(hit => hit && (!hideHidden || hit.definitionVisible)),
+        tagFacets,
         page: safePage,
         perPage: safePerPage,
     };
