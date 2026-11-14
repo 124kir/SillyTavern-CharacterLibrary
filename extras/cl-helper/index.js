@@ -753,6 +753,9 @@ function captureCtExpiry(setCookieHeader) {
 
 // CT API paths the proxy is allowed to forward (read-only endpoints only).
 const CT_ALLOWED_PATHS = [
+    // Read-only SvelteKit search endpoint for the updated CharacterTavern site.
+    /^\/search\/cards\/__data\.json$/,
+
     /^\/api\/search\/cards\b/,
     /^\/api\/character\/[^/]+\/[^/]+$/,
     /^\/api\/catalog\/top-tags$/,
