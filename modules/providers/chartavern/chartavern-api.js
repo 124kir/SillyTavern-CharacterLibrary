@@ -190,43 +190,85 @@ async function ctFetch(url, apiRequest) {
  * @param {Function} [apiRequest] - CoreAPI.apiRequest for authenticated proxy
  * @returns {Promise<{hits: Array, totalHits: number, totalPages: number, page: number}>}
  */
+// CT_SVELTEKIT_BRIDGE_V1 — CharacterTavern SvelteKit search compatibility.
+// Decode SvelteKit devalue's flattened, indexed data table.
+function decodeCtSvelteKitSearch(documentData) {
+    for (const node of documentData?.nodes || []) {
+        const table = node?.data;
+        if (!Array.isArray(table) || !table.length) continue;
+        const memo = new Map();
+        function deref(index) {
+            if (index === -1) return undefined;
+            if (index === -2) return NaN;
+            if (index === -3) return Infinity;
+            if (index === -4) return -Infinity;
+            if (index === -5) return -0;
+            if (!Number.isInteger(index) || index < 0 || index >= table.length) return undefined;
+            if (memo.has(index)) return memo.get(index);
+            const item = table[index];
+            if (Array.isArray(item)) {
+                const arr = [];
+                memo.set(index, arr);
+                for (const ref of item) arr.push(deref(ref));
+                return arr;
+            }
+            if (item !== null && typeof item === 'object') {
+                const obj = Object.create(null);
+                memo.set(index, obj);
+                for (const [key, ref] of Object.entries(item)) obj[key] = deref(ref);
+                return obj;
+            }
+            return item;
+        }
+        const root = deref(0);
+        if (Array.isArray(root?.searchResults?.hits)) return root.searchResults;
+    }
+    throw new Error('CharacterTavern changed its SvelteKit search response; adapter could not find searchResults');
+}
+
+/** Search the new CharacterTavern site using /search/cards/__data.json.
+ * Tag and sort support must be tested separately on the live site.
+ */
 export async function searchCards(opts = {}, apiRequest) {
     const {
-        query = '',
-        sort = 'most_popular',
-        page = 1,
-        limit = 30,
-        tags = '',
-        excludeTags = '',
-        minimumTokens,
-        maximumTokens,
-        hasLorebook,
-        isOC,
-        nsfw = true
+        query = '', sort = 'most_popular', page = 1,
+        tags = '', excludeTags = '', minimumTokens, maximumTokens,
+        hasLorebook, isOC, nsfw = true,
     } = opts;
-
     const params = new URLSearchParams();
     params.set('query', query);
-    params.set('sort', sort);
+    // Only "best" has been confirmed. Trending currently aliases best.
+    const sortMap = { most_popular: 'best', trending: 'best', newest: 'newest', oldest: 'oldest', most_likes: 'most_likes' };
+    params.set('sort', sortMap[sort] || sort || 'best');
     params.set('page', String(page));
-    params.set('limit', String(limit));
     if (tags) params.set('tags', tags);
-    if (excludeTags) params.set('exclude_tags', excludeTags);
+    const excluded = excludeTags ? excludeTags.split(',').map(x => x.trim()).filter(Boolean) : [];
+    if (!nsfw && !excluded.includes('nsfw')) excluded.push('nsfw');
+    if (excluded.length) params.set('exclude_tags', excluded.join(','));
     if (minimumTokens != null) params.set('minimum_tokens', String(minimumTokens));
     if (maximumTokens != null) params.set('maximum_tokens', String(maximumTokens));
     if (hasLorebook != null) params.set('hasLorebook', String(hasLorebook));
     if (isOC != null) params.set('isOC', String(isOC));
+    params.set('x-sveltekit-invalidated', '001');
 
-    // CT API has no explicit NSFW toggle - exclude_tags is used instead
-    if (!nsfw) {
-        const existing = excludeTags ? excludeTags.split(',').map(t => t.trim()) : [];
-        if (!existing.includes('nsfw')) existing.push('nsfw');
-        params.set('exclude_tags', existing.join(','));
-    }
-
-    const url = `${CT_API_BASE}/search/cards?${params}`;
+    const url = CT_SITE_BASE + '/search/cards/__data.json?' + params;
     const resp = await ctFetch(url, apiRequest);
-    return readJsonClassified(resp);
+    if (!resp.ok) throw new Error('CharacterTavern SvelteKit search returned HTTP ' + resp.status);
+    const result = decodeCtSvelteKitSearch(await resp.json());
+    const hits = result.hits.map(hit => ({
+        ...hit,
+        totalTokens: hit.totalTokens ?? hit.permanentTokens ?? 0,
+        pageDescription: hit.pageDescription ?? hit.tagline ?? '',
+        isNSFW: hit.isNSFW === true || (Array.isArray(hit.contentWarnings) && hit.contentWarnings.length > 0),
+    }));
+    return {
+        hits,
+        totalHits: result.totalHits ?? hits.length,
+        hitsPerPage: result.hitsPerPage ?? hits.length,
+        page: result.page ?? page,
+        totalPages: result.totalPages ?? 1,
+        query: result.query ?? query,
+    };
 }
 
 /**
@@ -236,13 +278,132 @@ export async function searchCards(opts = {}, apiRequest) {
  * @param {Function} [apiRequest] - CoreAPI.apiRequest for authenticated proxy
  * @returns {Promise<Object>} { card: {...}, ownerCTId: ... }
  */
-export async function fetchCharacterDetail(author, slug, apiRequest) {
-    const url = `${CT_API_BASE}/character/${encodeURIComponent(author)}/${encodeURIComponent(slug)}`;
-    const resp = await ctFetch(url, apiRequest);
-    if (!resp.ok) {
-        throw new Error(`CT detail returned HTTP ${resp.status}`);
+// CT_PNG_DETAILS_BRIDGE_V2: full downloadable CharacterTavern PNG embeds CCv3 metadata.
+function decodeCtCardPngV2(buffer) {
+    const bytes = new Uint8Array(buffer);
+    const sig = [137,80,78,71,13,10,26,10];
+    if (bytes.length < 12 || sig.some((b,i) => bytes[i] !== b)) {
+        throw new Error('CharacterTavern did not return a PNG card');
     }
-    return resp.json();
+    const dataView = new DataView(buffer);
+    const decoder = new TextDecoder();
+    const texts = new Map();
+    let sawCompressed = false;
+    let offset = 8;
+    while (offset + 12 <= bytes.length) {
+        const len = dataView.getUint32(offset, false);
+        const begin = offset + 8;
+        const end = begin + len;
+        if (end + 4 > bytes.length || end < begin) throw new Error('Invalid PNG chunk length');
+        const type = String.fromCharCode(...bytes.subarray(offset + 4, offset + 8));
+        const content = bytes.subarray(begin, end);
+        if (type === 'tEXt' || type === 'zTXt' || type === 'iTXt') {
+            const zero = content.indexOf(0);
+            if (zero > 0) {
+                const key = decoder.decode(content.subarray(0, zero)).toLowerCase();
+                if (key === 'ccv3' || key === 'chara') {
+                    if (type === 'tEXt') {
+                        texts.set(key, decoder.decode(content.subarray(zero + 1)));
+                    } else if (type === 'zTXt') {
+                        sawCompressed = true;
+                    } else {
+                        // iTXt: keyword\0 flag method language\0 translated-key\0 text
+                        let p = zero + 3;
+                        const langEnd = content.indexOf(0, p);
+                        if (langEnd >= 0) {
+                            p = langEnd + 1;
+                            const translatedEnd = content.indexOf(0, p);
+                            if (translatedEnd >= 0) {
+                                p = translatedEnd + 1;
+                                if (content[zero + 1] === 0) texts.set(key, decoder.decode(content.subarray(p)));
+                                else sawCompressed = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        offset = end + 4;
+        if (type === 'IEND') break;
+    }
+    const payload = texts.get('ccv3') || texts.get('chara');
+    if (!payload) {
+        throw new Error(sawCompressed
+            ? 'PNG metadata is compressed; check that the URL includes ?action=download'
+            : 'The downloaded PNG has no embedded CCv3/chara metadata');
+    }
+    let parsed;
+    try {
+        parsed = JSON.parse(payload);
+    } catch (_) {
+        try {
+            const binary = atob(payload.trim().replace(/\s/g, ''));
+            const utf8 = Uint8Array.from(binary, ch => ch.charCodeAt(0));
+            parsed = JSON.parse(decoder.decode(utf8));
+        } catch (error) {
+            throw new Error('Invalid JSON metadata inside CharacterTavern PNG');
+        }
+    }
+    const raw = parsed?.data && typeof parsed.data === 'object' ? parsed.data : parsed;
+    if (!raw || typeof raw !== 'object' || !('name' in raw)) {
+        throw new Error('Downloaded PNG does not contain a recognizable character card');
+    }
+    const data = {
+        ...raw,
+        name: raw.name || '',
+        description: raw.description || '',
+        personality: raw.personality || '',
+        scenario: raw.scenario || '',
+        first_mes: raw.first_mes || '',
+        mes_example: raw.mes_example || '',
+        system_prompt: raw.system_prompt || '',
+        post_history_instructions: raw.post_history_instructions || '',
+        creator_notes: raw.creator_notes || '',
+        creator: raw.creator || '',
+        character_version: raw.character_version || '',
+        tags: Array.isArray(raw.tags) ? raw.tags : [],
+        alternate_greetings: Array.isArray(raw.alternate_greetings) ? raw.alternate_greetings : [],
+        extensions: raw.extensions && typeof raw.extensions === 'object' ? raw.extensions : {},
+    };
+    return { spec: 'chara_card_v2', spec_version: '2.0', data };
+}
+
+/** Downloads complete card data from the canonical PNG and adapts it for the UI. */
+export async function fetchCharacterDetail(author, slug, _apiRequest) {
+    const path = author + '/' + slug;
+    const url = getCardPngUrl(path);
+    const response = await fetchWithProxy(url);
+    if (!response.ok) throw new Error('Card PNG download failed: HTTP ' + response.status);
+    const contentType = response.headers.get('content-type') || '';
+    if (contentType && !contentType.toLowerCase().includes('image/png') &&
+        !contentType.toLowerCase().includes('application/octet-stream')) {
+        throw new Error('CharacterTavern returned ' + contentType + ', not a PNG');
+    }
+    const buffer = await response.arrayBuffer();
+    if (buffer.byteLength > 20 * 1024 * 1024) throw new Error('Character PNG exceeds 20 MB');
+    const embedded = decodeCtCardPngV2(buffer);
+    const d = embedded.data;
+    return {
+        card: {
+            id: d.extensions?.chartavern?.id || null,
+            path,
+            name: d.name,
+            inChatName: d.name,
+            author: d.creator || author,
+            description: d.creator_notes,
+            tagline: d.creator_notes,
+            tags: d.tags,
+            definition_character_description: d.description,
+            definition_first_message: d.first_mes,
+            definition_example_messages: d.mes_example,
+            definition_personality: d.personality,
+            definition_scenario: d.scenario,
+            definition_system_prompt: d.system_prompt,
+            definition_post_history_prompt: d.post_history_instructions,
+            alternativeFirstMessage: d.alternate_greetings,
+        },
+        _embeddedCard: embedded,
+    };
 }
 
 /**
@@ -276,7 +437,7 @@ export function getAvatarUrl(path) {
  * @returns {string}
  */
 export function getCardPngUrl(path) {
-    return `${CT_CARDS_CDN}/${path}.png`;
+    return `${CT_CARDS_CDN}/${path.split('/').map(encodeURIComponent).join('/')}.png?action=download`;
 }
 
 /**
