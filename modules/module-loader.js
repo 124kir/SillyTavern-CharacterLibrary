@@ -377,6 +377,7 @@ async function initModuleSystem() {
             { name: 'datacat', load: () => import('./providers/datacat/datacat-provider.js') },
             { name: 'saucepan', load: () => import('./providers/saucepan/saucepan-provider.js') },
             { name: 'botbooru', load: () => import('./providers/botbooru/botbooru-provider.js') },
+            { name: 'spicychat', load: () => import('./providers/spicychat/spicychat-provider.js') },
         ];
         const results = await Promise.allSettled(providerImports.map(p => p.load()));
         for (let i = 0; i < results.length; i++) {
