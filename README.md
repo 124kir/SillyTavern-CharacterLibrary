@@ -2,8 +2,56 @@
 
 <!-- 124kir-fork-overview-v1 -->
 > [!IMPORTANT]
-> **Community-maintained fork / Пользовательский форк.** This is not an official release of the original extension or an official SpicyChat integration.
-> **Это не официальный релиз** оригинального расширения или SpicyChat. Оригинальный проект: [Sillyanonymous/SillyTavern-CharacterLibrary](https://github.com/Sillyanonymous/SillyTavern-CharacterLibrary).
+> **Unofficial community fork.** This version is maintained independently from the original extension. See [the upstream project](https://github.com/Sillyanonymous/SillyTavern-CharacterLibrary).
+>
+> **Неофициальный форк.** Ниже описание на русском; исходная документация автора сохранена в конце страницы.
+
+## English — What's different in this fork?
+
+This is an **unofficial fork** of [Sillyanonymous/SillyTavern-CharacterLibrary](https://github.com/Sillyanonymous/SillyTavern-CharacterLibrary). It preserves the original extension and adds compatibility fixes for online character catalogs and a **SpicyChat** provider. The original author's complete documentation is preserved below.
+
+| Provider | Changes in this fork |
+| --- | --- |
+| **CharacterTavern** | SvelteKit search compatibility and full-character PNG metadata import. **Known limitation:** Trending currently maps to Best. |
+| **Botbooru** | `cl-helper` routing workaround. NSFL visibility still depends on account flags and server-side settings. |
+| **SpicyChat** | Character discovery, four sorts (Trending / Top Rated / Popular / Newest), include/exclude tag filters, NSFW, Hide hidden definitions, infinite scrolling, in-library preview and conditional import. Import requires an author-public definition and sufficient character fields. |
+
+### Installation
+
+1. Install [SillyTavern](https://github.com/SillyTavern/SillyTavern) and stop it before modifying extensions.
+2. Clone this fork into the extensions directory (adjust the path to your SillyTavern installation):
+
+```bash
+git clone https://github.com/124kir/SillyTavern-CharacterLibrary.git SillyTavern/data/default-user/extensions/SillyTavern-CharacterLibrary
+```
+
+3. Start SillyTavern, refresh the page and launch Character Library. Manage provider visibility in **Character Library → Settings → Online**.
+
+**Already have Character Library installed?** Do not clone on top of an existing directory. Back up the current installation and preserve any local patches before replacing it. For a checkout already pointing to this fork, use the update command instead.
+
+### Updating
+
+Stop SillyTavern and run from your extensions directory:
+
+```bash
+git pull --ff-only
+```
+
+Then restart SillyTavern and refresh Character Library (`Ctrl+F5` if needed).
+
+- **`main`**: owner-tested working version (default).
+- **`dev`**: future development and testing.
+- Older feature/fix branches may remain as historical references.
+
+### Notes and limitations
+
+- This is **not** an official release from the original Character Library author, nor an official SpicyChat, CharacterTavern or Botbooru integration.
+- Some functionality requires the separate **`cl-helper` server plugin**. Updating Character Library does **not** update the installed copy at `SillyTavern/plugins/cl-helper`. See the [original cl-helper setup guide](#cl-helper-plugin-not-detected).
+- SpicyChat browsing uses publicly accessible catalog and character information. Creator-hidden character definitions are not retrieved or imported.
+- Never post personal chat data, API tokens, passwords, cookies or account configurations in issues.
+- Technical history: [CharacterTavern/Botbooru compatibility notes](COMPATIBILITY_FIXES_2026-11.md) and [SpicyChat development notes](SPICYCHAT_EXPERIMENTAL.md). Those documents contain earlier experiments; this README describes the current feature set.
+
+---
 
 ## 🇷🇺 Что изменено в этом форке
 
@@ -48,20 +96,6 @@ SpicyChat обращается к публичным поисковым и ка�
 Дополнительные технические заметки: [CharacterTavern / Botbooru](COMPATIBILITY_FIXES_2026-11.md), [SpicyChat](SPICYCHAT_EXPERIMENTAL.md). Эти документы содержат историю разработки и не всегда описывают актуальное состояние — за кратким обзором текущих функций ориентируйся на эту страницу.
 
 ---
-
-## English: fork quick start
-
-This **unofficial community fork** preserves the original Character Library features and adds CharacterTavern search/PNG fixes, a Botbooru proxy workaround, and a SpicyChat online provider.
-
-**SpicyChat:** public catalog browsing, Trending/Top Rated/Popular/Newest sorting, include/exclude tag filters, NSFW switch, hide hidden definitions, infinite scrolling, in-app preview, and import **only when the author has made the definition public and required card fields are available**. Do not expect private definitions to be imported.
-
-**Install (with SillyTavern stopped):**
-
-```bash
-git clone https://github.com/124kir/SillyTavern-CharacterLibrary.git SillyTavern/data/default-user/extensions/SillyTavern-CharacterLibrary
-```
-
-Open SillyTavern, refresh, launch Character Library, and check **Settings → Online** for provider visibility. Update an existing Git checkout with `git pull --ff-only` after backing up your changes. `main` is the owner-tested branch; `dev` is for new work. Installed `cl-helper` server plugins must be updated separately. See the original project's complete documentation below.
 
 ---
 
