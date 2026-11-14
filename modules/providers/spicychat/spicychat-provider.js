@@ -46,6 +46,11 @@ class SpicyChatBrowseView extends BrowseView {
         this.query = '';
         this.sort = 'popular';
         this.nsfw = false;
+        this.hideHidden = CoreAPI.getSetting?.('spicyHideHiddenDefinitions') === true;
+        this.tagInclude = new Set();
+        this.tagExclude = new Set();
+        this.tagFacets = [];
+        this.tagSearch = '';
         this.hits = [];
         this.ids = new Set();
         this.hasMore = true;
@@ -75,7 +80,16 @@ class SpicyChatBrowseView extends BrowseView {
 
     renderFilterBar() {
         return '<div class="browse-sort-container"><select id="spicySort" class="glass-select" aria-label="SpicyChat sorting"><option value="popular">Trending</option><option value="newest">Newest</option></select></div>' +
+            '<details id="spicyTagsPanel" class="browse-tags-dropdown-container" style="position:relative">' +
+            '<summary id="spicyTagsSummary" class="glass-btn" style="cursor:pointer;list-style:none"><i class="fa-solid fa-tags"></i> Tags</summary>' +
+            '<div class="dropdown-menu browse-tags-dropdown" style="display:block;position:absolute;z-index:100;right:0;min-width:260px;max-height:360px;overflow:auto;background:var(--glass-bg, #222);padding:10px;border:1px solid var(--glass-border, #555)">' +
+            '<input id="spicyTagSearch" type="search" placeholder="Find tags..." class="glass-input" autocomplete="off" aria-label="Find SpicyChat tags" style="width:100%">' +
+            '<div id="spicyTagOptions" style="max-height:260px;overflow:auto"></div>' +
+            '<button id="spicyTagClear" type="button" class="glass-btn">Clear tags</button>' +
+            '<div class="settings-hint">Click tag: include → exclude → off. Include matches any selected tag.</div>' +
+            '</div></details>' +
             '<label class="glass-btn nsfw-toggle" style="display:inline-flex;align-items:center;gap:6px"><input id="spicyNsfw" type="checkbox">Include NSFW</label>' +
+            '<label class="glass-btn" style="display:inline-flex;align-items:center;gap:6px"><input id="spicyHideHidden" type="checkbox">Hide hidden definitions</label>' +
             '<button id="spicyRefresh" type="button" class="glass-btn icon-only" title="Refresh"><i class="fa-solid fa-rotate-right"></i></button>';
     }
 
@@ -131,6 +145,21 @@ class SpicyChatBrowseView extends BrowseView {
         });
         document.getElementById('spicySort')?.addEventListener('change', () => this.newSearch());
         document.getElementById('spicyNsfw')?.addEventListener('change', () => this.newSearch());
+        document.getElementById('spicyHideHidden')?.addEventListener('change', e => {
+            this.hideHidden = e.target.checked;
+            CoreAPI.setSetting?.('spicyHideHiddenDefinitions', this.hideHidden);
+            this.newSearch();
+        });
+        document.getElementById('spicyTagSearch')?.addEventListener('input', e => {
+            this.tagSearch = e.target.value.trim().toLocaleLowerCase();
+            this.renderTagOptions();
+        });
+        document.getElementById('spicyTagClear')?.addEventListener('click', () => {
+            this.tagInclude.clear();
+            this.tagExclude.clear();
+            this.renderTagOptions();
+            this.newSearch();
+        });
         document.getElementById('spicyRefresh')?.addEventListener('click', () => this.newSearch());
         document.getElementById('spicyMoreBtn')?.addEventListener('click', () => { void this.loadMore(); });
         const modal = document.getElementById('spicyCharModal');
@@ -148,6 +177,10 @@ class SpicyChatBrowseView extends BrowseView {
             this.query = '';
             this.sort = 'popular';
             this.nsfw = false;
+            this.tagFacets = [];
+            this.tagInclude.clear();
+            this.tagExclude.clear();
+            this.tagSearch = '';
             this.hits = [];
             this.ids.clear();
             this.page = 1;
@@ -161,6 +194,9 @@ class SpicyChatBrowseView extends BrowseView {
         if (sort) sort.value = this.sort;
         const nsfw = document.getElementById('spicyNsfw');
         if (nsfw) nsfw.checked = this.nsfw;
+        const hide = document.getElementById('spicyHideHidden');
+        if (hide) hide.checked = this.hideHidden;
+        this.renderTagOptions();
         if (!this.hits.length) void this.loadPage(true);
         else this.renderGrid();
     }
@@ -187,7 +223,53 @@ class SpicyChatBrowseView extends BrowseView {
         this.query = document.getElementById('spicySearch')?.value?.trim() || '';
         this.sort = document.getElementById('spicySort')?.value || 'popular';
         this.nsfw = document.getElementById('spicyNsfw')?.checked === true;
+        this.hideHidden = document.getElementById('spicyHideHidden')?.checked === true;
         void this.loadPage(true);
+    }
+
+    renderTagOptions() {
+        const list = document.getElementById('spicyTagOptions');
+        const summary = document.getElementById('spicyTagsSummary');
+        if (summary) {
+            const count = this.tagInclude.size + this.tagExclude.size;
+            summary.textContent = count ? 'Tags (' + count + ')' : 'Tags';
+        }
+        if (!list) return;
+        list.replaceChildren();
+        // Preserve selected tags even when the current facet page has no matching entries.
+        const known = new Map(this.tagFacets.map(t => [t.name, t.count]));
+        for (const tag of [...this.tagInclude, ...this.tagExclude]) if (!known.has(tag)) known.set(tag, null);
+        const matches = [...known.entries()].filter(([tag]) => tag.toLocaleLowerCase().includes(this.tagSearch))
+            .sort(([a], [b]) => {
+                const activeA = this.tagInclude.has(a) || this.tagExclude.has(a);
+                const activeB = this.tagInclude.has(b) || this.tagExclude.has(b);
+                return Number(activeB) - Number(activeA) || a.localeCompare(b);
+            });
+        if (!matches.length) {
+            const empty = document.createElement('div');
+            empty.textContent = 'No tags in current results';
+            empty.style.padding = '10px';
+            list.appendChild(empty);
+        }
+        for (const [tag, count] of matches) {
+            const state = this.tagInclude.has(tag) ? 'include' : this.tagExclude.has(tag) ? 'exclude' : 'off';
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'glass-btn';
+            button.style.cssText = 'width:100%;display:flex;justify-content:space-between;gap:8px;text-align:left;margin:3px 0';
+            button.setAttribute('aria-pressed', state !== 'off' ? 'true' : 'false');
+            const mark = state === 'include' ? '+ ' : state === 'exclude' ? '− ' : '';
+            button.textContent = mark + tag + (count == null ? '' : ' (' + count + ')');
+            button.title = state === 'include' ? 'Included. Click to exclude' : state === 'exclude' ? 'Excluded. Click to clear' : 'Click to include';
+            button.addEventListener('click', () => {
+                if (state === 'off') { this.tagInclude.add(tag); this.tagExclude.delete(tag); }
+                else if (state === 'include') { this.tagInclude.delete(tag); this.tagExclude.add(tag); }
+                else { this.tagInclude.delete(tag); this.tagExclude.delete(tag); }
+                this.renderTagOptions();
+                this.newSearch();
+            });
+            list.appendChild(button);
+        }
     }
 
     status(text) {
@@ -216,8 +298,12 @@ class SpicyChatBrowseView extends BrowseView {
             const result = await searchSpicyCharacters({
                 query: this.query, page: requestedPage, perPage: 24,
                 nsfw: this.nsfw, sort: this.sort,
+                hideHidden: this.hideHidden,
+                includeTags: [...this.tagInclude], excludeTags: [...this.tagExclude],
             });
             if (token !== this.token || !this.active) return;
+            this.tagFacets = result.tagFacets || [];
+            this.renderTagOptions();
             for (const hit of result.hits) {
                 if (!this.nsfw && hit.isNsfw) continue;
                 if (this.ids.has(hit.id)) continue;
@@ -227,7 +313,8 @@ class SpicyChatBrowseView extends BrowseView {
             this.page = requestedPage + 1;
             this.hasMore = requestedPage * result.perPage < result.found && requestedPage < 100 && result.hits.length > 0;
             this.renderGrid();
-            this.status(result.found ? 'Found ' + result.found.toLocaleString() + ' SpicyChat characters' : 'No characters found');
+            this.status(result.found ? 'Found ' + result.found.toLocaleString() + ' SpicyChat characters' +
+                (this.hideHidden ? ' with public definitions' : '') : 'No characters found');
         } catch (error) {
             if (token !== this.token || !this.active) return;
             this.status('SpicyChat search error: ' + (error?.message || error));
