@@ -364,6 +364,8 @@ class SpicyChatBrowseView extends BrowseView {
             }
         } catch (error) {
             if (token !== this.detailToken) return;
+            set('spicyCharVisibility', 'Details unavailable');
+            set('spicyCharDescription', 'Character details could not be retrieved. The public listing remains available.');
             set('spicyDetailStatus', 'Unable to load details: ' + (error?.message || error));
             if (importBtn) { importBtn.disabled = true; importBtn.textContent = 'Import unavailable'; }
         }
