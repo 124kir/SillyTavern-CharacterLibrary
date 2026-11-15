@@ -3,12 +3,36 @@
 import { ProviderBase } from '../provider-interface.js';
 import { BrowseView } from '../browse-view.js';
 import CoreAPI from '../../core-api.js';
-import { assignGalleryId, importFromPng, fetchWithProxy } from '../provider-utils.js';
+import { assignGalleryId, importFromPng, fetchWithProxy, finishBrowseImport } from '../provider-utils.js';
 import { searchSpicyCharacters, fetchSpicyDetail, parseSpicyDetail, isSpicyImportable } from './spicychat-api.js';
 
 const esc = value => String(value ?? '').replace(/[&<>"']/g, ch => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' })[ch]);
 const msg = value => String(value || '').trim();
 const safeId = value => /^[a-z0-9_-]{4,128}$/i.test(String(value || ''));
+
+// Use the same image-overlay badge structure as CharacterTavern.
+function markSpicyCardImported(card) {
+    if (!card) return;
+    card.classList.add('in-library');
+    card.classList.remove('possible-library');
+    const img = card.querySelector('.browse-card-image');
+    if (!img) return;
+    let badges = img.querySelector('.browse-feature-badges:not(.browse-feature-badges-tl)');
+    if (!badges) {
+        badges = document.createElement('div');
+        badges.className = 'browse-feature-badges';
+        img.appendChild(badges);
+    }
+    badges.querySelector('.possible-library')?.remove();
+    if (!badges.querySelector('.browse-feature-badge.in-library')) {
+        const badge = document.createElement('span');
+        badge.className = 'browse-feature-badge in-library';
+        badge.title = 'In Your Library';
+        badge.innerHTML = '<i class="fa-solid fa-check"></i>';
+        badges.prepend(badge);
+    }
+}
+
 
 function buildCard(detail) {
     const id = String(detail.id);
@@ -76,8 +100,35 @@ class SpicyChatBrowseView extends BrowseView {
     }
     _getImageGridIds() { return ['spicyGrid']; }
     _extractProviderIds(char, ids) {
-        const id = char?.data?.extensions?.spicychat?.id;
-        if (id) ids.add(String(id));
+        // The library holds both full V2 and slim character records.
+        for (const info of [char?.data?.extensions?.spicychat, char?.extensions?.spicychat]) {
+            const id = info?.id || info?.path;
+            if (id) ids.add(String(id));
+        }
+    }
+
+    isInLocalLibrary(hit) {
+        if (hit?.id && this._lookup.byProviderId.has(String(hit.id))) return true;
+        // Mirror CharacterTavern's exact name+creator fallback for old
+        // imported cards without provider link metadata.
+        const name = String(hit?.name || '').toLowerCase().trim();
+        const creator = String(hit?.creator || '').toLowerCase().trim();
+        return !!(name && creator && this._lookup.byNameAndCreator?.has(name + '|' + creator));
+    }
+
+    refreshInLibraryBadges() {
+        const grid = document.getElementById('spicyGrid');
+        if (!grid) return;
+        const byId = new Map(this.hits.map(hit => [String(hit.id), hit]));
+        for (const card of grid.querySelectorAll('.browse-card[data-spicy-id]')) {
+            const hit = byId.get(card.dataset.spicyId);
+            if (hit && this.isInLocalLibrary(hit)) {
+                markSpicyCardImported(card);
+            } else {
+                card.classList.remove('in-library');
+                card.querySelector('.browse-feature-badge.in-library')?.remove();
+            }
+        }
     }
 
     renderFilterBar() {
@@ -215,6 +266,7 @@ class SpicyChatBrowseView extends BrowseView {
             this.loading = false;
         }
         super.activate(container, options);
+        this.buildLocalLibraryLookup();
         const input = document.getElementById('spicySearch');
         if (input) input.value = this.query;
         const sort = document.getElementById('spicySort');
@@ -225,7 +277,10 @@ class SpicyChatBrowseView extends BrowseView {
         if (hide) hide.checked = this.hideHidden;
         this.renderTagOptions();
         if (!this.hits.length) void this.loadPage(true);
-        else this.renderGrid();
+        else {
+            this.renderGrid();
+            this.refreshInLibraryBadges();
+        }
     }
 
     deactivate() {
@@ -412,14 +467,8 @@ class SpicyChatBrowseView extends BrowseView {
             messages.className = 'browse-card-stat';
             messages.textContent = Number(hit.messages || 0).toLocaleString() + ' messages';
             footer.appendChild(messages);
-            if (this._lookup.byProviderId.has(hit.id)) {
-                card.classList.add('in-library');
-                const owned = document.createElement('span');
-                owned.className = 'browse-feature-badge in-library';
-                owned.textContent = 'In library';
-                footer.appendChild(owned);
-            }
             card.appendChild(footer);
+            if (this.isInLocalLibrary(hit)) markSpicyCardImported(card);
             fragment.appendChild(card);
         }
         grid.appendChild(fragment);
@@ -510,14 +559,36 @@ class SpicyChatBrowseView extends BrowseView {
             const provider = CoreAPI.getProvider('spicychat');
             const result = await provider.importCharacter(selected.detail.id, selected.hit);
             if (!result?.success) throw new Error(result?.error || 'Import failed');
-            this._lookup.byProviderId.add(selected.detail.id);
-            CoreAPI.showToast?.('Imported ' + result.characterName, 'success');
-            this.closePreview();
-            const grid = document.getElementById('spicyGrid');
-            if (grid) {
-                const card = [...grid.querySelectorAll('.browse-card[data-spicy-id]')].find(node => node.dataset.spicyId === selected.detail.id);
-                card?.classList.add('in-library');
-            }
+            const mediaUrls = result.embeddedMediaUrls || [];
+            const galleryPageUrls = result.galleryPageUrls || [];
+            // Original CharacterTavern lifecycle refreshes the live library,
+            // builds lookup keys and stamps the badge after successful import.
+            await finishBrowseImport({
+                view: this,
+                summaryArgs: {
+                    mediaCharacters: [{
+                        name: result.characterName,
+                        avatar: result.fileName,
+                        avatarUrl: result.avatarUrl,
+                        mediaUrls,
+                        galleryPageUrls,
+                        galleryId: result.galleryId,
+                        cardData: result.cardData,
+                    }],
+                },
+                showSummary: (mediaUrls.length > 0 || galleryPageUrls.length > 0)
+                    && CoreAPI.getSetting('importMediaAction') !== 'none',
+                closePreview: () => this.closePreview(),
+                importBtn: btn,
+                characterName: result.characterName,
+                avatarFileName: result.fileName,
+                markImported: () => {
+                    this._lookup.byProviderId.add(String(selected.detail.id));
+                    const card = [...(document.getElementById('spicyGrid')?.querySelectorAll('.browse-card[data-spicy-id]') || [])]
+                        .find(node => node.dataset.spicyId === selected.detail.id);
+                    markSpicyCardImported(card);
+                },
+            });
         } catch (error) {
             CoreAPI.showToast?.('SpicyChat import failed: ' + (error?.message || error), 'error');
         } finally {
@@ -549,8 +620,9 @@ class SpicyChatProvider extends ProviderBase {
     activate(container, options = {}) { this.view.activate(container, options); }
     deactivate() { this.view.deactivate(); }
     getLinkInfo(char) {
-        const id = char?.data?.extensions?.spicychat?.id;
-        return id ? { providerId: 'spicychat', id, fullPath: id } : null;
+        const info = char?.data?.extensions?.spicychat || char?.extensions?.spicychat;
+        const id = info?.id || info?.path;
+        return id ? { providerId: 'spicychat', id: String(id), fullPath: String(id) } : null;
     }
     getListingName(hit) { return hit?.name || null; }
     canHandleUrl(url) {
