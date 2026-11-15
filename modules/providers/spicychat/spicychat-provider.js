@@ -111,7 +111,7 @@ class SpicyChatBrowseView extends BrowseView {
         return '<div id="spicyCharModal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-label="SpicyChat character preview">' +
           '<div class="modal-glass browse-char-modal">' +
           '<div class="modal-header">' +
-          '<div class="browse-char-header-info"><img id="spicyCharAvatar" src="/img/ai4.png" alt="" class="browse-char-avatar">' +
+          '<div class="browse-char-header-info"><img id="spicyCharAvatar" src="/img/ai4.png" alt="" class="browse-char-avatar" role="button" tabindex="0" title="View full-size avatar" aria-label="View full-size avatar" style="cursor:zoom-in">' +
           '<div><h2 id="spicyCharName">Character</h2><p class="browse-char-meta" id="spicyCharAuthor"></p></div></div>' +
           '<div class="modal-controls"><a id="spicyOpenOriginal" target="_blank" rel="noopener noreferrer" class="action-btn secondary"><i class="fa-solid fa-external-link"></i> Open</a>' +
           '<button id="spicyImport" type="button" class="action-btn primary" disabled>Checking...</button>' +
@@ -167,6 +167,31 @@ class SpicyChatBrowseView extends BrowseView {
         const modal = document.getElementById('spicyCharModal');
         if (modal && !modal.dataset.spicyWired) {
             modal.dataset.spicyWired = '1';
+            // Reuse Character Library's full-size image viewer, like CharacterTavern.
+            // Only a real selected character avatar can open the viewer (never the placeholder).
+            const avatar = modal.querySelector('#spicyCharAvatar');
+            const openAvatar = event => {
+                event.stopPropagation();
+                const source = this.selected?.detail?.avatar || this.selected?.hit?.avatar;
+                if (!source) return;
+                try {
+                    const url = new URL(source);
+                    if (url.protocol !== 'https:') return;
+                    // SpicyChat CDN thumbnails can include ?class=avatar256x256.
+                    // The full-resolution URL omits that resize option.
+                    if (url.hostname === 'cdn.nd-api.com') url.searchParams.delete('class');
+                    BrowseView.openAvatarViewer(url.href, avatar.src);
+                } catch (error) {
+                    console.warn('[SpicyChat] Cannot open full-size avatar:', error?.message || error);
+                }
+            };
+            avatar?.addEventListener('click', openAvatar);
+            avatar?.addEventListener('keydown', event => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    openAvatar(event);
+                }
+            });
             modal.querySelector('#spicyClose')?.addEventListener('click', () => this.closePreview());
             modal.addEventListener('click', e => { if (e.target === modal) this.closePreview(); });
             modal.querySelector('#spicyImport')?.addEventListener('click', () => { void this.importSelected(); });
